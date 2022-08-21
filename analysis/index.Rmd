@@ -3,9 +3,18 @@ title: "Home"
 site: workflowr::wflow_site
 output:
   workflowr::wflow_html:
-    toc: false
+    toc: True
 editor_options:
   chunk_output_type: console
 ---
 
-Welcome to my research website.
+
+# Mixed Model Applications
+
+This project website provides examples of using mixed-effect models in agricultural research applications.
+
+The following topics will be addressed:
+
++ Phenotypic analysis of routine breeding trials  
++ Analysis of multi-environment trials  
++ Genomewide prediction  

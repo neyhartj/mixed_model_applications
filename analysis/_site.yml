@@ -1,12 +1,10 @@
-name: "mixed_model_applications"
+name: "Mixed Model Applications"
 output_dir: ../docs
 navbar:
-  title: "mixed_model_applications"
+  title: "Mixed Model Applications"
   left:
   - text: Home
     href: index.html
-  - text: About
-    href: about.html
   - text: License
     href: license.html
 output:
