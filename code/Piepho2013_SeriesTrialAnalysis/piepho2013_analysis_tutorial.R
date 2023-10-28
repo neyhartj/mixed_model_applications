@@ -4,19 +4,18 @@
 ##
 
 # Load packages
-library(sommer)
+# library(sommer)
 library(tidyverse)
-library(nlme)
+# library(nlme)
 library(glmmTMB)
-library(lme4)
+# library(lme4)
 library(asreml)
+library(StageWise)
+library(mmrm)
 
-
-# Set directories
-setwd("MixedModels/Piepho2013_SeriesTrialAnalysis/")
 
 # Read in the data
-pheno_dat <- read_csv(file = "piepho2013_lolium_data.csv") %>%
+pheno_dat <- read_csv(file = "data/piepho2013_lolium_data.csv") %>%
   # Rename columns like the notation in the paper
   select(yld, GEN, LOC, trl, blk, PLT = PLOT, yr, har) %>%
   rename_all(toupper) %>%
@@ -25,6 +24,9 @@ pheno_dat <- read_csv(file = "piepho2013_lolium_data.csv") %>%
 # Set asreml options
 asreml.options(workspace = "500mb", ai.sing = TRUE, maxit = 30)
 
+
+
+# Single-stage analysis ---------------------------------------------------
 
 # One location, one trial -------------------------------------------------
 
@@ -144,68 +146,145 @@ as.data.frame(VarCorr(fit3))
 
 
 
+
+
+
 # Two-stage analysis ------------------------------------------------------
 
+# Two-stage analysis will involve calculating genotype-harvest year means and their
+# variances per trial and then using this information in a stage-2 analysis
+
+# One location, one trial -------------------------------------------
 
 
-# # One location, one trial -------------------------------------------
 
-# Calculate genotype means per harvest year and location
+# One location, several trials --------------------------------------------
 
-pheno_dat_use4 <- pheno_dat_use_142 %>%
-  filter(trl == "2003") %>%
+# For each trial in the location, fit a model for the single-location, single-trial
+pheno_dat_use_142 <- pheno_dat %>%
+  subset(LOC == "142") %>%
   droplevels()
 
-# Loop over harvest years and locations
-stage_one_means <- pheno_dat_use4 %>%
-  group_by(har) %>%
+
+# Group by trl
+stage1_loc142 <- pheno_dat_use_142 %>%
+  group_by(TRL) %>%
   do({
-
     df <- .
-    df1 <- droplevels(df)
 
-    # Fit a model for this harvest year - location
-    fit_i <- lmer(yld ~ 0 + gen + (1|blk) + (1|blk:plot), data = df1,
-                  control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
+    # # TMB
+    # fit0 <- glmmTMB(formula = YLD ~ GEN + HAR + GEN:HAR + (1|BLK:PLT) + (1|BLK),
+    #                 data = df, control = glmmTMBControl(rank_check = "adjust"))
+    # fit1 <- update(fit0, formula = YLD ~ GEN + HAR + GEN:HAR + (1|BLK:PLT) + (1|BLK:PLT:HAR) +
+    #                  (1|BLK) + (1|BLK:HAR))
+    # fit2 <- update(fit0, formula = YLD ~ GEN + HAR + GEN:HAR + cs(HAR + 0|BLK:PLT) + cs(HAR + 0|BLK))
+    # fit3 <- update(fit0, formula = YLD ~ GEN + HAR + GEN:HAR + ar1(HAR + 0|BLK:PLT) + ar1(HAR + 0|BLK))
+    #
+    #
+    # nd <- distinct(df, GEN, HAR) %>%
+    #   mutate(BLK = NA, PLT = NA)
+    # pred_fit0 <- predict(fit0, newdata = nd, se.fit = TRUE, cov.fit = TRUE, re.form = ~ 0, allow.new.levels = TRUE)
+    # pred_fit1 <- predict(fit1, newdata = nd, se.fit = TRUE, cov.fit = TRUE, re.form = ~ 0, allow.new.levels = TRUE)
+    #
+    # # MMRM
+    # fit0_lmer <- lmer(YLD ~ GEN + HAR + GEN:HAR + (1|BLK:PLT) + (1|BLK),
+    #                   data = df)
+    # fit1_mmrm <- mmrm(formula = YLD ~ GEN + HAR + GEN:HAR + cs(HAR|BLK/PLT),
+    #                   data = df)
+    # fit2_mmrm <- mmrm(formula = YLD ~ GEN + HAR + GEN:HAR + csh(HAR|BLK/PLT),
+    #                   data = df)
+    # fit3_mmrm <- mmrm(formula = YLD ~ GEN + HAR + GEN:HAR + ar1(HAR|BLK/PLT),
+    #                   data = df)
+    # fit4_mmrm <- mmrm(formula = YLD ~ GEN + HAR + GEN:HAR + ar1h(HAR|PLT),
+    #                   data = df)
+
+    # Number of harvest years
+    nHAR <- length(unique(df$HAR))
+
+    # Try different single location, single-trial models
+    fit0 <- asreml(fixed = YLD ~ GEN + HAR + GEN:HAR,
+                   random = ~ BLK:PLT:id(HAR) + BLK:id(HAR),
+                   residual = ~ units,
+                   data = df)
+    fit1_cs <- update(fit0, random = ~ BLK:PLT:corv(HAR) + BLK:corv(HAR))
+    fit2_csh <- update(fit0, random = ~ BLK:PLT:corh(HAR) + BLK:corh(HAR))
+    # Fit AR1 only if nHAR >= 3
+    if (nHAR >= 3) {
+      fit3_ar1 <- update(fit0, random = ~ BLK:PLT:ar1(HAR) + BLK:ar1(HAR))
+      fit4_ar1h <- update(fit0, random = ~ BLK:PLT:ar1h(HAR) + BLK:ar1h(HAR))
+      fit5_us <- update(fit0, random = ~ BLK:PLT:us(HAR) + BLK:us(HAR))
+    } else {
+      fit3_ar1 <- fit4_ar1h <- fit5_us <- NULL
+    }
+
+    # List of models
+    fit_list <- list(us = fit5_us, ar1h = fit4_ar1h, ar1 = fit3_ar1, csh = fit2_csh, cs = fit1_cs, id = fit0)
+    fit_list <- subset(fit_list, !sapply(fit_list, is.null))
+
+    # Pick the fit with the lowest AIC
+    aics <- sapply(fit_list, function(x) summary(x)$aic)
+    fit_use <- fit_list[[which.min(aics)]]
+
+    # Predict means
+    preds <- predict.asreml(fit_use, classify = "GEN:HAR", vcov = TRUE)
+
+    # Return the means and VCOV
+    tibble(covstr = names(which.min(aics)), varcomp = list(summary(fit_use)$varcomp),
+           blues = list(as.data.frame(preds$pvals)), vcov = list(preds$vcov))
+
+  }) %>% ungroup()
 
 
+# Try using Stage2 from the StageWise package
 
-    stage_one_fit1 <- lmer(yld ~ gen + har + gen:har + (1|loc) + (1|loc:har) + (1|loc:gen) + (1|loc:gen:har) +
-                             (1|loc:blk) + (1|loc:blk:har) + (1|loc:blk:plot) + (1|loc:blk:plot:har),
-                           data = pheno_dat_use4,
-                           control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
+# Prepare the data and VCOV matrix
+#
+# Set gen x har as id
+# Set year as env
+# Set trl as loc
+#
+stage1_loc142_blues <- stage1_loc142 %>%
+  select(TRL, blues) %>%
+  unnest(blues) %>%
+  rename(BLUE = predicted.value) %>%
+  mutate(id = paste0(GEN, ":", HAR),
+         env = TRL)
+stage1_loc142_vcov <- stage1_loc142 %>%
+  mutate(vcov = map2(vcov, blues, ~{
+    id <- paste0(.y$GEN, ":", .y$HAR)
+    `dimnames<-`(.x, list(id, id))
+  })) %>%
+  pull(vcov)
+names(stage1_loc142_vcov) <- levels(stage1_loc142_blues$env)
+
+stage2_out <- Stage2(data = stage1_loc142_blues, vcov = stage1_loc142_vcov,
+                     max.iter = 25)
+
+# Try another approach
+# id = GEN
+# loc = HAR
+# env = TRLxHAR
+
+stage1_loc142_blues <- stage1_loc142 %>%
+  select(TRL, blues) %>%
+  unnest(blues) %>%
+  rename(BLUE = predicted.value) %>%
+  left_join(., distinct(pheno_dat_use_142, TRL, HAR, YR)) %>%
+  mutate(id = GEN, loc = HAR, env = YR)
+stage1_loc142_vcov <- stage1_loc142 %>%
+  mutate(vcov = map2(vcov, blues, ~{
+    id <- paste0(.y$GEN, ":", .y$HAR)
+    `dimnames<-`(.x, list(id, id))
+  })) %>%
+  pull(vcov)
+names(stage1_loc142_vcov) <- levels(stage1_loc142_blues$env)
+
+stage2_out <- Stage2(data = stage1_loc142_blues, max.iter = 100)
 
 
-
-
-
-
-# # Several locations, one trial -------------------------------------------
-
-# Calculate genotype means per harvest year and location
-
-pheno_dat_use4 <- pheno_dat %>%
-  filter(trl == "2003") %>%
-  droplevels()
-
-# Loop over harvest years and locations
-stage_one_means <- pheno_dat_use4 %>%
-  group_by(har, loc) %>%
-  do({
-
-    df <- .
-    df1 <- droplevels(df)
-
-    # Fit a model for this harvest year - location
-    fit_i <- lmer(yld ~ 0 + gen + (1|blk) + (1|blk:plot), data = df1,
-                  control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
-
-
-
-stage_one_fit1 <- lmer(yld ~ gen + har + gen:har + (1|loc) + (1|loc:har) + (1|loc:gen) + (1|loc:gen:har) +
-                         (1|loc:blk) + (1|loc:blk:har) + (1|loc:blk:plot) + (1|loc:blk:plot:har),
-                       data = pheno_dat_use4,
-                       control = lmerControl(check.nobs.vs.nlev = "ignore", check.nobs.vs.nRE = "ignore"))
-
-
+# BLUP prep
+prep <- blup_prep(data = stage1_loc142_blues, vars = stage2_out$vars)
+# Calculate blups
+har_index <- c("1" = 0.2, "2" = 0.3, "3" = 0.5)
+blups <- blup(data = prep, what = "GV", index.coeff = har_index)
 

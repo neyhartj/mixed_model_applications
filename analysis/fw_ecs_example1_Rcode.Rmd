@@ -1,0 +1,667 @@
+---
+title: "Finlay-Wilkinson Regression"
+author: "neyhartj"
+date: "2023-01-10"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+
+## Introduction
+
+Finlay-Wilkinson regression is a popular statistic approach to analyze linear genotype-environment interactions. The traditional regression approach used ordinary least squares, but mixed-model versions can handle situations like heterogeneity of genotypic deviations from regression or missing data.
+
+
+
+## FW Regression with Environmental Covariates
+
+This is an R code version of the Example 1 SAS code provided by Piepho.
+
+The format will include the SAS code and the R equivalent
+
+
+This example looks at a lettuce dataset. The phenotypic data contains
+
+```{r load.lettuce}
+load("data/vanEeuwijk1992Lettuce.RData")
+lettuce_pheno <- pheno %>%
+  mutate(environment = fct_inseq(environment),
+         genotype = as.factor(genotype)) %>%
+  arrange(across())
+
+# Convert to wide format
+lettuce_pheno_wide <- lettuce_pheno %>%
+  mutate(genotype = factor(genotype, levels = c("Pa", "DM", "Pi", "GT", "RW", "Wi", "Tr", "Ls"))) %>%
+  spread(genotype, nitrate)
+
+lettuce_ec <- ec %>%
+  mutate(environment = fct_inseq(environment)) %>%
+  # Rename to be consistent with Piepho
+  rename_all(~str_replace(., "ec", "x"))
+
+# Standardize the ec data
+lettuce_ec_std <- lettuce_ec %>%
+  mutate_at(vars(-environment), ~as.numeric(scale(.)))
+
+# Merge the data
+lettuce <- left_join(lettuce_pheno, lettuce_ec_std) %>%
+  rename(gen = genotype, env = environment)
+
+# Ignore singularities
+asreml.options(ai.sing = TRUE, workspace = 1e9)
+
+```
+
+
+#### Baseline model
+
+SAS code:
+
+```{sas}
+/*BASELINE*/
+proc mixed data=g covtest method=REML;
+class gen env;
+model yield=gen/noint solution; # noint omits the intercept
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+```
+
+R version:
+
+```{r}
+fit1 <- asreml(fixed = nitrate ~ -1 + gen, # No intercept
+               random = ~ env, 
+               residual = ~ ar1(env):gen,
+               data = lettuce)
+
+fit1_summ <- summary(fit1)
+
+# Print variance components
+fit1_summ$varcomp
+
+
+```
+
+These match the variance components presented in Table 5 for the "Without covariate" section.
+
+
+#### FA model
+
+
+SAS code:
+
+```{sas}
+/*FA*/
+
+proc mixed data=a lognote;
+class gen env;
+model yield=gen env;
+run;
+
+proc mixed data=a lognote;
+class gen env;
+model yield=gen env;
+repeated env/sub=gen type=ar(1);
+run;
+
+```
+
+R version:
+
+```{r}
+fit2a <- asreml(fixed = nitrate ~ gen + env, 
+                data = lettuce)
+fit2a_summ <- summary(fit2a)
+
+fit2b <- asreml(fixed = nitrate ~ gen + env, 
+                residual = ~ ar1(env):gen,
+                data = lettuce)
+fit2b_summ <- summary(fit2b)
+
+
+```
+
+
+#### FA0(1) model
+
+##### Different version of fitting FA models
+
+We can fit a FA model using the `fa()` special function in asreml:
+
+```{r}
+
+# First, fit a regular FA model using the fa argument
+fit_fa1 <- asreml(fixed = nitrate ~ gen + env,
+                  random = ~ fa(env, k = 2):gen,
+                  residual = ~ ar1(env):gen,
+                  data = lettuce)
+
+# # Second, fit a fa model using the rr special and the diagonal special
+# fit_fa2 <- asreml(fixed = nitrate ~ gen + env, 
+#                   random = ~ rr(env, k = 2):gen + diag(env):gen,
+#                   residual = ~ ar1(env):gen,
+#                   data = lettuce)
+
+
+```
+
+
+
+##### Fit the models
+
+
+
+SAS code:
+
+```{sas}
+     /*FA0(1)*/
+
+proc mixed data=a lognote covtest method=ML;
+ods output covparms=cp0;
+class gen env;
+model yield=gen env;
+random x1-x8/sub=gen type=FA0(1);
+parms / pdata=cp;
+parms (.1)(.1)(.1)(.1)(.1)(.1)(.1)(.1)
+      (.1)(.1);
+repeated env/sub=gen type=ar(1);
+run;
+
+```
+
+R code:
+
+```{r}
+# Assume EC is a pxq matrix of known environmental covariates
+EC_df <- lettuce %>%
+  select(env, starts_with("x")) %>%
+  distinct() %>%
+  as.data.frame()
+EC <- as.matrix(column_to_rownames(EC_df, "env"))
+# 
+# # Fake A matrix
+# A <- diag(nlevels(lettuce$gen))
+# dimnames(A) <- list(levels(lettuce$gen), levels(lettuce$gen))
+# 
+# fit_fa2 <- asreml(fixed = nitrate ~ gen + env, 
+#                   random = ~ str( ~ mbf(EC):vm(gen, A), vmodel = ~ rr(7, 1):vm(gen, A)),
+#                   residual = ~ ar1(env):gen,
+#                   mbf = list(EC = list(key = c("env", "env"), cov = "EC_df")),
+#                   data = lettuce)
+
+
+```
+
+R code:
+
+```{r}
+
+lettuce1 <- lettuce %>% 
+  mutate(x0 = 0,
+         x01 = x0)
+
+# Random effect formulation
+random_form <- reformulate(paste0(sort(grep(pattern = "^x", x = names(lettuce1), value = TRUE)), ":gen"))
+
+# fit_fa2 <- asreml(fixed = nitrate ~ -1 + gen + env, 
+#                   random = ~ str(form = ~x0:gen + x01:gen + x1:gen + x2:gen + x3:gen + x4:gen + x5:gen + x6:gen + x7:gen + x8:gen, vmodel = ~ rr(8, k = 2):id(8)),
+#                   residual = ~ ar1(env):gen,
+#                   data = lettuce1)
+
+
+```
+
+
+
+proc mixed data=a lognote covtest method=REML;
+ods output covparms=cp;
+class gen env;
+model yield=gen env;
+random x1-x8/sub=gen type=FA0(1);
+parms / pdata=cp0;
+repeated env/sub=gen type=ar(1);
+run;
+
+data cp2;
+set cp;
+output;
+if _N_<9 and _N_>1 then do;
+  estimate=0.1; output;
+end;
+run;
+
+proc mixed data=a lognote;
+ods output covparms=cp3;
+class gen env;
+model yield=gen env;
+random x1-x8/sub=gen type=FA0(2);
+parms / pdata=cp2;
+repeated env/sub=gen type=ar(1);
+run;
+
+data cp;
+set cp;
+if _N_<9;
+array slope slope1-slope8;
+do i=1 to 8;
+  slope[i]=0;
+end;
+slope[_N_]=estimate;
+run;
+
+proc means noprint data=cp;
+var slope1-slope8;
+output out=slopes sum=;
+run;
+
+data g;
+set a;
+if _N_=1 then set slopes;
+array slope slope1-slope8;
+array x x1-x8;
+z=0;
+do i=1 to 8;
+  z=z+slope[i]*x[i];
+end;
+run;
+
+proc mixed data=g method=ML;
+class gen env;
+model yield=gen z gen*z /ddfm=KR;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+proc mixed data=g method=REML covtest;
+class gen env;
+model yield=gen gen*z/noint solution;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+
+R version:
+
+```{r}
+
+
+fit3a <- asreml(fixed = nitrate ~ gen + env, 
+                data = lettuce)
+
+
+fit2a_summ <- summary(fit2a)
+
+fit2b <- asreml(fixed = nitrate ~ gen + env, 
+                residual = ~ ar1(env):gen,
+                data = lettuce)
+fit2b_summ <- summary(fit2b)
+
+
+```
+
+
+proc mixed data=a lognote covtest method=ML;
+ods output covparms=cp0;
+class gen env;
+model yield=gen env;
+random x1-x8/sub=gen type=FA0(1);
+parms / pdata=cp;
+parms (.1)(.1)(.1)(.1)(.1)(.1)(.1)(.1)
+      (.1)(.1);
+repeated env/sub=gen type=ar(1);
+run;
+
+proc mixed data=a lognote covtest method=REML;
+ods output covparms=cp;
+class gen env;
+model yield=gen env;
+random x1-x8/sub=gen type=FA0(1);
+parms / pdata=cp0;
+repeated env/sub=gen type=ar(1);
+run;
+
+
+
+#### SVD
+
+SAS code:
+
+```{sas}
+/*SVD*/
+
+data svd;
+set svd;
+keep gen env pred;
+run;
+
+proc iml;
+use svd; 
+read all var _num_ into pred;
+pred=pred[,2];
+close svd;
+use svd0; 
+read all var _num_ into int;
+int=int[1:8,1];
+print int;
+close svd0;
+p=shape(pred,18,8); p=t(p);
+p_centered=p-int*j(1,18,1);
+print pred p p_centered;
+call svd(u,q,v,p_centered);
+print u q v;
+a=u*diag(q)*t(v);
+print a;
+create z_svd from v;
+append from v;
+close z_svd;
+run;
+quit;
+
+data z_svd;
+set z_svd;
+z1=col1;
+z2=col2;
+z3=col3;
+env=_N_;
+run;
+
+       /*check*/
+# data w;
+# merge e z_svd;
+# by env;
+# run;
+# 
+# proc reg;
+# model col1=x1-x8;
+# run;
+
+data v;
+merge a z_svd;
+by env;
+run;
+
+proc mixed data=v method=REML covtest;
+class gen env;
+model yield=gen gen*z1/noint solution;
+random env;
+repeated env/sub=gen type=ar(1);
+run;
+
+proc mixed data=v method=ML;
+class gen env;
+model yield=gen gen*z1;
+random env;
+repeated env/sub=gen type=ar(1);
+run;
+
+proc mixed data=v method=REML;
+class gen env;
+model yield=gen gen*z1 gen*z2;
+random env;
+repeated env/sub=gen type=ar(1);
+run;
+
+proc mixed data=v method=ML;
+class gen env;
+model yield=gen gen*z1 gen*z2;
+random env;
+repeated env/sub=gen type=ar(1);
+run;
+
+
+
+```
+
+R code:
+
+```{r}
+
+# SVD of environmental covariates
+ec_mat <- lettuce_ec_std %>%
+  column_to_rownames("environment") %>%
+  as.matrix()
+
+ec_svd <- svd(x = t(ec_mat))
+z_svd <- `dimnames<-`(ec_svd$v, list(row.names(ec_mat), paste0("z", seq_len(ncol(ec_mat)))))
+
+lettuce1 <- left_join(select(lettuce, -starts_with("x")), rownames_to_column(as.data.frame(z_svd), "env")) %>%
+  mutate(env = factor(env, levels = levels(lettuce$env)))
+
+
+# proc mixed data=v method=REML covtest;
+# class gen env;
+# model yield=gen gen*z1/noint solution;
+# random env;
+# repeated env/sub=gen type=ar(1);
+# run;
+
+fit_svd1 <- asreml(fixed = nitrate ~ gen + gen:z1, 
+                   random = ~ env,
+                   residual = ~ ar1(env):gen,
+                   data = lettuce1)
+
+fit_svd1_summ <- summary(fit_svd1)
+
+fit_svd1_summ$varcomp
+
+
+fit_svd2 <- asreml(fixed = nitrate ~ gen + gen:z1 + gen:z2, 
+                   random = ~ env,
+                   residual = ~ ar1(env):gen,
+                   data = lettuce1)
+
+fit_svd2_summ <- summary(fit_svd2)
+
+fit_svd2_summ$varcomp
+```
+
+
+
+
+#### Factorial regression
+
+SAS code:
+
+```{sas}
+/*FACTORIAL REGRESSION*/
+
+proc mixed data=a covtest method=REML;
+ods output solutionF=svd0;
+class gen env;
+model yield=gen x1-x8 gen*x1 gen*x2 gen*x3 gen*x4 gen*x5 gen*x6 gen*x7 gen*x8/noint solution ddfm=KR outpm=SVD;
+random env;
+repeated env/ sub=gen type=ar(1);
+parms (.1)(.1)(.1)/lowerb=0,0,0;
+run;
+
+proc mixed data=a covtest method=ML;
+ods output solutionF=svd0;
+class gen env;
+model yield=gen x1-x8 gen*x1 gen*x2 gen*x3 gen*x4 gen*x5 gen*x6 gen*x7 gen*x8/noint solution ddfm=KR outpm=SVD;
+random env;
+repeated env/ sub=gen type=ar(1);
+parms (.1)(.1)(.1)/lowerb=0,0,0;
+run;
+
+
+```
+
+R code:
+
+```{r}
+
+# Create the fixed formula
+fixed_form <- reformulate(termlabels = c("gen", names(lettuce_ec)[-1], paste0("gen:", names(lettuce_ec)[-1])),
+                          response = "nitrate")
+
+fit_fr1 <- asreml(fixed = fixed_form, 
+                  random = ~ env,
+                  residual = ~ ar1(env):gen,
+                  data = lettuce)
+
+fit_fr1_summ <- summary(fit_fr1)
+
+fit_fr1_summ$varcomp
+
+```
+
+These match the variance components presented in Table 5 for the "with covariates x1-x8" FR section.
+
+
+
+
+#### PLS
+
+##### Run the PLS on the environmental covariates
+
+SAS code:
+
+
+```{sas}
+/*PLS*/
+
+proc standard data=e out=f2 mean=0 std=1;
+var x1-x8;
+run;
+
+data h;
+merge f2 wide;
+by env;
+run;
+
+proc pls data=h method=pls noscale nocenter;
+model gen1-gen8=x1-x8;
+output out=z XSCORE=z;
+run;
+
+```
+
+
+R version:
+
+```{r}
+library(pls)
+
+# lettuce_ec_std is the standardized EC data frame
+# 
+# merge with the lettuce pheno wide
+lettuce_wide1 <- left_join(lettuce_pheno_wide, lettuce_ec_std) %>%
+  rename(env = environment)
+
+# Separate into matrices
+Y <- as.matrix(column_to_rownames(lettuce_pheno_wide, "environment"))
+X <- as.matrix(column_to_rownames(lettuce_ec_std, "environment"))
+
+# Run PLS
+z_pls <- plsr(Y ~ X, scale = FALSE, center = FALSE)
+
+# Get the scores
+z_pls_scores <- scores(z_pls)[,] %>% 
+  as.data.frame() %>%
+  rename_all(~paste0("z", seq_along(.))) %>%
+  rownames_to_column("env") %>%
+  mutate(env = as.factor(env))
+  
+
+
+```
+
+
+SAS code:
+
+```{sas}
+
+data k;
+merge z b;
+by env;
+run;
+
+proc mixed data=k;
+class gen env;
+model yield=gen z1 gen*z1 /ddfm=KR;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+proc mixed data=k covtest method=REML;
+class gen env;
+model yield=gen gen*z1/noint solution;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+proc mixed data=k covtest method=ML;
+class gen env;
+model yield=gen gen*z1/noint;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+proc mixed data=k covtest method=REML;
+class gen env;
+model yield=gen gen*z1 gen*z2/noint solution;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+proc mixed data=k covtest method=ML;
+class gen env;
+model yield=gen gen*z1 gen*z2/noint;
+random env;
+repeated env/ sub=gen type=ar(1);
+run;
+
+```
+
+R code:
+
+```{r}
+# data k;
+# merge z b;
+# by env;
+# run;
+lettuce1 <- left_join(lettuce, z_pls_scores)
+
+
+# proc mixed data=k covtest method=REML;
+# class gen env;
+# model yield=gen gen*z1/noint solution;
+# random env;
+# repeated env/ sub=gen type=ar(1);
+# run;
+fit_pls1 <- asreml(fixed = nitrate ~ -1 + gen + gen:z1, 
+                   random = ~ env,
+                   residual = ~ ar1(env):gen,
+                   data = lettuce1)
+
+
+fit_pls2 <- asreml(fixed = nitrate ~ gen + gen:z1 + gen:z2, 
+                   random = ~ env,
+                   residual = ~ ar1(env):gen,
+                   data = lettuce1)
+
+
+
+fit2 <- asreml(fixed = nitrate ~ -1 + gen + gen:z1, # No intercept
+               random = ~ env + ar1(env):gen, 
+               residual = ~ units,
+               data = lettuce1)
+
+
+```
+
+These match the variance components presented in Table 5 for the "With covariate z1" under PLS
+
+
+
+
+
+
+
+
+
+
+

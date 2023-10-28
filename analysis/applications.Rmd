@@ -1,0 +1,31 @@
+---
+title: "Applications"
+date: "2022-12-27"
+output: workflowr::wflow_html
+editor_options:
+  chunk_output_type: console
+---
+
+# Introduction
+
+This page offers example applications of mixed models for plant breeding analyses
+
+
+## Stage-wise Analysis of Trials
+
+### Appropriate R packages
+
+There are [many R packages for fitting mixed-effect models](https://cran.r-project.org/web/views/MixedModels.html). Some allow for flexible covariance structures, kinship/covariance matrices, and setting or fixing prior estimates of variance components. A summary of some R packages and their capabilities is below:
+
+
+| Package name | Supported covariance structures | Kinship | Fix variance components | Weighting |
+|--------------|---------------------------------|---------|-------------------------|-----------|
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| lme4         | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+| asreml       | ID, CS, AR1, EXP, FAn, US       | X       | X                       | X         |
+

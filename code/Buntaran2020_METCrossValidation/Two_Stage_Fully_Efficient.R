@@ -12,7 +12,7 @@ require(stringr)    # Split the character to provide factor's name
 options("scipen"=100,"digits" =4 ) # set numbering format
 
 ##### Data input ######
-ww <- read.csv("Winter Wheat 2016.csv",h=T)
+ww <- read.csv("code/Buntaran2020_METCrossValidation/Winter Wheat 2016.csv",h=T)
 ww <- na.omit(ww)
 
 ##### Change to factor #####
